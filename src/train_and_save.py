@@ -66,6 +66,15 @@ def load_and_sanitize_data(path):
             print(f"⚠️ Outliers: Removendo {mask_outlier.sum()} registros com erro em 'oldpeak'.")
             df = df[~mask_outlier]
 
+     # 4. Remoção Estatística de Outliers (NOVO!)
+    # Focamos apenas nas variáveis contínuas que costumam explodir
+    cols_to_clean = ['chol', 'resting_bp', 'thalach', 'oldpeak']
+    
+    # Usamos fator 3.0 (Outliers Extremos) em vez de 1.5.
+    # Por que? Num dataset médico pequeno (~300 linhas), remover outliers "leves"
+    # pode eliminar justamente os pacientes doentes que queremos detectar!
+    df = remove_outliers_iqr(df, cols_to_clean, factor=3.0)
+    
     return df
 
 def get_feature_lists(X: pd.DataFrame):
