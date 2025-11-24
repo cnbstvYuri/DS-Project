@@ -1,0 +1,28 @@
+# --- Python (Essencial) ---
+__pycache__/
+*.py[cod]
+*$py.class
+
+# --- Ambientes Virtuais 
+venv/
+env/
+.venv/
+.env
+
+# --- VS Code (Configurações locais do seu editor) ---
+.vscode/
+*.code-workspace
+
+# --- Jupyter Notebooks (Checkpoints) ---
+.ipynb_checkpoints/
+
+
+# --- Arquivos de Sistema (Linux/Mac/Windows) ---
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# --- Logs e Testes ---
+*.log
+.pytest_cache/
