@@ -72,37 +72,36 @@ DATA_PATH = 'data/heart.csv'
 @st.cache_data
 def load_data(path):
     """
-    Carrega o dataset, renomeia colunas, remove duplicatas e aplica engenharia de atributos.
-    O cache é usado para evitar recarregamento a cada interação do usuário.
+    Carrega o dataset, limpa e CORRIGE o target invertido.
     """
     if not os.path.exists(path):
         return None
 
     df = pd.read_csv(path)
     
-    # Padronização dos nomes das colunas
+    # 1. Renomeia colunas
     df = df.rename(columns={k:v for k,v in COL_MAP.items() if k in df.columns})
     
-    # Limpeza de dados: Remoção de duplicatas para evitar viés estatístico
+    # 2. 🚨 CORREÇÃO CRÍTICA DE TARGET (Igual ao treino)
+    # O dataset original tem 0=Doença. Invertemos para 1=Doença.
+    if 'target' in df.columns:
+        df['target'] = df['target'].apply(lambda x: 1 if x == 0 else 0)
+
+    # 3. Limpeza de Duplicatas
     df = df.drop_duplicates()
     
-    # Filtro de sanidade: Remove outliers impossíveis (erros de digitação)
+    # 4. Filtro de Sanidade (Oldpeak)
     if 'oldpeak' in df.columns:
         df = df[df['oldpeak'] <= 20]
 
-    # Engenharia de Atributos (Deve replicar a lógica usada no treinamento)
-    # 1. Categorização de Idade e Colesterol
+    # 5. Engenharia de Atributos
     df['AgeGroup'] = pd.cut(df['age'], bins=[0,39,54,69,120], labels=['Young','Adult','Senior','Elderly'])
     df['CholCategory'] = pd.cut(df['chol'], bins=[0,199,239,10000], labels=['Desirable','Borderline','High'])
-    
-    # 2. Binários e Índices Calculados
     df['AgeOver50'] = (df['age'] > 50).astype(int)
     
-    # CSI (Cardiac Shock Index) - Trata divisão por zero
     df['CSI'] = df['resting_bp'] / df['thalach'].replace(0, np.nan)
     df['CSI'] = df['CSI'].fillna(df['CSI'].median())
     
-    # Contagem de Fatores de Risco
     df['RiskFactorsCount'] = ((df['chol'] >= 240).astype(int) + 
                               (df['resting_bp'] >= 130).astype(int) + 
                               (df['age'] > 50).astype(int))
