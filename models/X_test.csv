@@ -1,6 +1,6 @@
 age,sex,cp,resting_bp,chol,fbs,restecg,thalach,exang,oldpeak,slope,ca,thal,AgeGroup,CholCategory,AgeOver50,CSI,RiskFactorsCount
 63,0,0,108,269,0,1,169,1,1.8,1,2,2,Senior,High,1,0.6390532544378699,2
-67,0,2,115,564,0,0,160,0,1.6,1,0,3,Senior,High,1,0.71875,2
+67,0,2,115,466,0,0,160,0,1.6,1,0,3,Senior,High,1,0.71875,2
 44,1,1,130,219,0,0,188,0,0.0,2,0,2,Adult,Borderline,0,0.6914893617021277,1
 58,1,0,150,270,0,0,111,1,0.8,2,0,3,Senior,High,1,1.3513513513513513,3
 57,1,0,132,207,0,1,168,1,0.0,2,0,3,Senior,Borderline,1,0.7857142857142857,2

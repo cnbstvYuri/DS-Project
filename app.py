@@ -11,8 +11,12 @@ import numpy as np
 import os
 import joblib
 import plotly.express as px
+import seaborn as sns
+import matplotlib.pyplot as plt
+from scipy import stats
 from src.utils import load_test_split, compute_metrics, get_feature_names_from_pipeline, feature_engineering
 from src.explainability import compute_shap
+from sklearn.metrics import accuracy_score, recall_score, confusion_matrix, classification_report
 
 # Configuração inicial da página (Layout Wide para melhor visualização de gráficos)
 st.set_page_config(page_title="Dashboard Doença Cardíaca", layout="wide", initial_sidebar_state="expanded")
@@ -25,10 +29,17 @@ st.set_page_config(page_title="Dashboard Doença Cardíaca", layout="wide", init
 VAL_MAPS = {
     'sex': {0: 'Mulher', 1: 'Homem'},
     'cp': { 
-        0: 'Angina Típica (Risco Baixo)', 
-        1: 'Angina Atípica (Risco Alto)', 
-        2: 'Dor Não-Anginosa (Risco Alto)', 
-        3: 'Assintomático'
+           # Valor 0: É onde está a maioria dos doentes. É a dor clássica.
+            0: 'Angina Típica (ALTO RISCO)', 
+            
+            # Valor 1: Tem bastante gente saudável.
+            1: 'Angina Atípica (Risco Médio)',
+            
+            # Valor 2: A maioria é saudável. Dor que não é do coração.
+            2: 'Dor Não-Anginosa (Risco Baixo)', 
+            
+            # Valor 3: O grupo que sobrou.
+            3: 'Assintomático'
     },
     'fbs': {0: 'Glicemia < 120', 1: 'Glicemia > 120'}, 
     'exang': {0: 'Não', 1: 'Sim'}, 
@@ -155,7 +166,8 @@ menu_options = {
     "Validação de Hipóteses": "Hypothesis",
     "Performance do Modelo": "Model Performance",
     "Explicabilidade (SHAP)": "Explainability",
-    "Simulador (Previsão)": "Predict"
+    "Simulador (Previsão)": "Predict",
+    "Outliers": "Outliers"
 }
 page_selection = st.sidebar.radio("Ir para:", list(menu_options.keys()))
 page = menu_options[page_selection]
@@ -373,31 +385,103 @@ if page == 'Hypothesis':
 
 # --- PÁGINA: PERFORMANCE DO MODELO ---
 if page == 'Model Performance':
-    st.header("Avaliação de Performance (Test Set)")
-    
-    # Carrega dados de teste (nunca vistos pelo modelo)
+    st.header("📊 Comparativo de Modelos (Test Set)")
+    st.markdown("Avaliação lado a lado do Random Forest vs. Logistic Regression nos dados de teste.")
+
+    # Carrega dados de teste
     X_test, y_test = load_test_split()
     
     if X_test is None:
-        st.warning("Dataset de teste não encontrado. Execute o treinamento primeiro.")
+        st.warning("⚠️ Dataset de teste não encontrado. Execute o treinamento primeiro (python src/train_and_save.py).")
     else:
         models_dict = load_models_if_exist()
-        for name, model in models_dict.items():
-            st.subheader(f"Modelo: {name}")
-            metrics = compute_metrics(model, X_test, y_test)
+        
+        if not models_dict:
+            st.error("Nenhum modelo encontrado na pasta models/.")
+        else:
+            # ---------------------------------------------------------
+            # 1. CÁLCULO DAS MÉTRICAS
+            # ---------------------------------------------------------
+            results = []
             
-            # Exibição de KPIs
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Acurácia", f"{metrics.get('accuracy',0):.1%}")
-            if 'roc_auc' in metrics: 
-                c2.metric("ROC AUC", f"{metrics.get('roc_auc',0):.3f}")
+            # Dicionário para guardar relatórios detalhados para exibição posterior
+            reports_dict = {} 
+            confusion_matrices = {}
+
+            for name, model in models_dict.items():
+                y_pred = model.predict(X_test)
+                
+                # Métricas Gerais
+                acc = accuracy_score(y_test, y_pred)
+                recall = recall_score(y_test, y_pred) # Sensibilidade (Detectar Doença)
+                
+                results.append({
+                    "Modelo": name,
+                    "Acurácia Geral": acc,
+                    "Sensibilidade (Recall)": recall
+                })
+                
+                # Guarda Matriz de Confusão
+                confusion_matrices[name] = confusion_matrix(y_test, y_pred)
+                
+                # Gera o relatório estilo "Terminal" mas em formato de dicionário
+                report = classification_report(y_test, y_pred, output_dict=True)
+                reports_dict[name] = pd.DataFrame(report).transpose()
+
+            # ---------------------------------------------------------
+            # 2. TABELA COMPARATIVA (RESUMO)
+            # ---------------------------------------------------------
+            st.subheader("🏆 Resumo da Batalha")
+            df_results = pd.DataFrame(results).set_index("Modelo")
             
-            # Matriz de Confusão
-            st.markdown("**Matriz de Confusão**")
-            cm = pd.DataFrame(metrics['confusion_matrix'], 
-                              index=['Real: Saudável', 'Real: Doença'], 
-                              columns=['Pred: Saudável', 'Pred: Doença'])
-            st.dataframe(cm)
+            # Formatação condicional: Destaca o maior valor em verde
+            st.dataframe(
+                df_results.style.highlight_max(axis=0, color='lightgreen')
+                                .format("{:.1%}"),
+                use_container_width=True
+            )
+            
+            st.info("ℹ️ **Sensibilidade (Recall)** é a métrica mais importante aqui: ela mede a % de doentes que o modelo conseguiu encontrar.")
+
+            # ---------------------------------------------------------
+            # 3. DETALHES LADO A LADO (Igual ao print do terminal)
+            # ---------------------------------------------------------
+            st.markdown("---")
+            st.subheader("🔍 Detalhes por Classe (Precision, Recall, F1)")
+            
+            # Cria colunas dinamicamente baseado no número de modelos
+            cols = st.columns(len(models_dict))
+            
+            for idx, (name, model) in enumerate(models_dict.items()):
+                with cols[idx]:
+                    st.markdown(f"### 🤖 {name}")
+                    
+                    # A. Matriz de Confusão
+                    st.markdown("**Matriz de Confusão:**")
+                    cm = pd.DataFrame(confusion_matrices[name], 
+                                      index=['Real: Saudável', 'Real: Doença'], 
+                                      columns=['Pred: Saudável', 'Pred: Doença'])
+                    st.dataframe(cm, use_container_width=True)
+                    
+                    # B. Relatório Completo (O que você queria!)
+                    st.markdown("**Relatório Detalhado:**")
+                    report_df = reports_dict[name]
+                    
+                    # Limpeza visual do dataframe
+                    report_df = report_df.drop('accuracy', errors='ignore') # Acurácia já mostramos acima
+                    
+                    # Traduzindo índices para ficar bonito
+                    report_df.index = [
+                        'Saudável (0)' if idx == '0' else 
+                        'Doença (1)' if idx == '1' else 
+                        idx for idx in report_df.index
+                    ]
+                    
+                    # Exibe formatado em porcentagem
+                    st.dataframe(
+                        report_df.style.format("{:.1%}"),
+                        use_container_width=True
+                    )
 
 # --- PÁGINA: EXPLICABILIDADE (SHAP) ---
 if page == 'Explainability':
@@ -537,3 +621,120 @@ if page == 'Predict':
                 st.error(f"Erro na predição: {e}")
         else:
             st.error("Modelo não carregado.")
+
+if page == 'Outliers':
+    st.header("🕵️ Análise de Outliers e Qualidade de Dados")
+    st.markdown("""
+    Esta seção investiga valores extremos nas variáveis contínuas. 
+    **Objetivo:** Diferenciar *Erros de Dados* (que devem ser removidos) de *Pacientes Graves* (que devem ser mantidos).
+    """)
+
+    # 1. Controles Interativos
+    with st.expander("⚙️ Configurações da Análise", expanded=True):
+        col_conf1, col_conf2 = st.columns(2)
+        with col_conf1:
+            z_threshold = st.slider(
+                "Limiar de Z-Score (Desvios Padrão)", 
+                min_value=2.0, max_value=6.0, value=3.0, step=0.1,
+                help="Valores acima de 3 geralmente são considerados outliers extremos."
+            )
+        with col_conf2:
+            st.info(f"Com Z-Score > {z_threshold}, estamos procurando valores muito distantes da média.")
+
+    # Variáveis contínuas que queremos analisar
+    # Usamos o mapeamento para pegar os nomes bonitos
+    cols_continuas = ['age', 'resting_bp', 'chol', 'thalach', 'oldpeak']
+    target_col = LABEL_MAP.get('target', 'Diagnóstico') # Para colorir os gráficos
+
+   # ---------------------------------------------------------
+    # SEÇÃO 1: INSPEÇÃO VISUAL (BOXPLOTS)
+    # ---------------------------------------------------------
+    st.subheader("1. Inspeção Visual (Boxplots)")
+    st.caption("Observe os pontos fora das 'caixas'. Se os pontos forem da cor **Vermelha/Doente**, geralmente indicam risco e não erro.")
+
+    # Nome técnico da coluna no DataFrame
+    col_dados_target = 'target' 
+    # Nome bonito para aparecer na legenda
+    nome_bonito_target = LABEL_MAP.get('target', 'Diagnóstico')
+
+    # Cria um grid de gráficos (2 por linha)
+    for i in range(0, len(cols_continuas), 2):
+        col1, col2 = st.columns(2)
+        
+        # Coluna da Esquerda
+        var_name = cols_continuas[i]
+        label_pretty = LABEL_MAP.get(var_name, var_name)
+        
+        with col1:
+            #x e color usam 'col_dados_target' ('target'), não 'Diagnóstico'
+            fig = px.box(
+                df, 
+                x=col_dados_target,  
+                y=var_name, 
+                color=col_dados_target, 
+                title=f"Distribuição: {label_pretty}",
+                points="all",
+                hover_data=df.columns,
+                # Aqui dizemos ao Plotly: "Onde estiver escrito 'target', mostre 'Diagnóstico'"
+                labels={col_dados_target: nome_bonito_target, var_name: label_pretty}
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        
+        # Coluna da Direita (se houver variável sobrando)
+        if i + 1 < len(cols_continuas):
+            var_name_2 = cols_continuas[i+1]
+            label_pretty_2 = LABEL_MAP.get(var_name_2, var_name_2)
+            with col2:
+                # CORREÇÃO AQUI TAMBÉM
+                fig2 = px.box(
+                    df, 
+                    x=col_dados_target, 
+                    y=var_name_2, 
+                    color=col_dados_target, 
+                    title=f"Distribuição: {label_pretty_2}",
+                    points="all",
+                    hover_data=df.columns,
+                    labels={col_dados_target: nome_bonito_target, var_name_2: label_pretty_2}
+                )
+                st.plotly_chart(fig2, use_container_width=True)
+
+    # ---------------------------------------------------------
+    # SEÇÃO 2: DETECÇÃO ESTATÍSTICA (TABELA)
+    # ---------------------------------------------------------
+    st.markdown("---")
+    st.subheader(f"2. Detecção Automática (Z-Score > {z_threshold})")
+    
+    outliers_totais = pd.DataFrame()
+
+    for col in cols_continuas:
+        # Calcula Z-score apenas para a coluna atual
+        col_zscore = np.abs(stats.zscore(df[col]))
+        
+        # Filtra as linhas
+        mask_outlier = col_zscore > z_threshold
+        df_out = df[mask_outlier].copy()
+        
+        if not df_out.empty:
+            df_out['Motivo_Outlier'] = f"{LABEL_MAP.get(col, col)} ({col}) = " + df_out[col].astype(str)
+            df_out['Valor_Z'] = col_zscore[mask_outlier]
+            outliers_totais = pd.concat([outliers_totais, df_out])
+
+    if not outliers_totais.empty:
+        # Ordena por quão extremo é o valor (Z-Score)
+        outliers_totais = outliers_totais.sort_values(by='Valor_Z', ascending=False)
+        
+        n_outliers = len(outliers_totais)
+        st.warning(f"Foram encontrados **{n_outliers}** registros considerados outliers estatísticos.")
+        
+        # Mostra tabela resumida
+        cols_visualizacao = ['Motivo_Outlier', 'target', 'Valor_Z', 'age', 'sex']
+        # Adiciona colunas que existam no df
+        cols_finais = [c for c in cols_visualizacao if c in outliers_totais.columns]
+        
+        st.dataframe(
+            outliers_totais[cols_finais].style.background_gradient(subset=['Valor_Z'], cmap='Reds'),
+            use_container_width=True
+        )
+        
+    else:
+        st.success(f"Nenhum outlier encontrado com Z-Score > {z_threshold}. Seus dados parecem comportados (ou o limiar está muito alto).")

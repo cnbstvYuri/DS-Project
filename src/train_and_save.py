@@ -25,10 +25,12 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
+from sklearn.metrics import classification_report, recall_score # Adicionado para validação final
 
 # Importa a lógica centralizada de engenharia de features para garantir consistência
 # com o ambiente de produção (app.py)
-from utils import feature_engineering
+
+from utils import feature_engineering 
 
 # Dicionário de mapeamento para padronizar nomes de colunas
 COL_MAP = {
@@ -36,10 +38,34 @@ COL_MAP = {
     'thalach':'thalach','exang':'exang','oldpeak':'oldpeak','slope':'slope','ca':'ca','thal':'thal','target':'target'
 }
 
+def cap_outliers(df, cols, factor=3.0):
+    """
+    NOVA FUNÇÃO: Em vez de remover (o que perde pacientes graves), aplicamos um 'teto'.
+    Valores muito acima de Q3 + 3*IQR são trazidos para o limite máximo aceitável.
+    Isso mantém o dado do paciente doente, mas reduz o ruído estatístico.
+    """
+    df_capped = df.copy()
+    print("🔧 Aplicando Capping em Outliers (preservando dados)...")
+    
+    for col in cols:
+        if col not in df_capped.columns: continue
+        
+        Q1 = df_capped[col].quantile(0.25)
+        Q3 = df_capped[col].quantile(0.75)
+        IQR = Q3 - Q1
+        
+        # Definimos os limites (Teto e Piso)
+        upper_limit = Q3 + (factor * IQR)
+        lower_limit = Q1 - (factor * IQR)
+        
+        # .clip() força os valores a ficarem dentro desse intervalo
+        df_capped[col] = df_capped[col].clip(lower=lower_limit, upper=upper_limit)
+        
+    return df_capped
+
 def load_and_sanitize_data(path):
     """
     Carrega o dataset e aplica regras de qualidade de dados (Data Quality).
-    Remove duplicatas e filtra valores fisiologicamente impossíveis (Outliers de erro).
     """
     if not os.path.exists(path):
         raise FileNotFoundError(f"Dataset não encontrado em: {path}")
@@ -51,30 +77,20 @@ def load_and_sanitize_data(path):
     df = df.rename(columns={k:v for k,v in COL_MAP.items() if k in df.columns})
     
     # 2. Remoção de Duplicatas
-    # Dados duplicados causam vazamento de dados (data leakage) entre treino e teste.
     n_total = len(df)
     df = df.drop_duplicates()
     n_removidos = n_total - len(df)
     if n_removidos > 0:
         print(f"🧹 Data Cleaning: {n_removidos} linhas duplicadas removidas.")
     
-    # 3. Sanity Check (Remoção de Erros de Digitação)
-    # Ex: 'oldpeak' > 20 é impossível clinicamente.
-    if 'oldpeak' in df.columns:
-        mask_outlier = df['oldpeak'] > 20 
-        if mask_outlier.sum() > 0:
-            print(f"⚠️ Outliers: Removendo {mask_outlier.sum()} registros com erro em 'oldpeak'.")
-            df = df[~mask_outlier]
-
-     # 4. Remoção Estatística de Outliers (NOVO!)
-    # Focamos apenas nas variáveis contínuas que costumam explodir
+    # 4. Tratamento Estatístico de Outliers (CORRIGIDO)
+    # Anteriormente deletávamos linhas. Agora usamos Capping (Winsorization).
+    # Isso impede que percamos pacientes com Oldpeak alto ou Pressão alta.
     cols_to_clean = ['chol', 'resting_bp', 'thalach', 'oldpeak']
     
-    # Usamos fator 3.0 (Outliers Extremos) em vez de 1.5.
-    # Por que? Num dataset médico pequeno (~300 linhas), remover outliers "leves"
-    # pode eliminar justamente os pacientes doentes que queremos detectar!
-    df = remove_outliers_iqr(df, cols_to_clean, factor=3.0)
-    
+    # Usamos fator 3.0 para ser bem conservador (só altera valores impossíveis/extremos)
+    df = cap_outliers(df, cols_to_clean, factor=3.0)
+
     return df
 
 def get_feature_lists(X: pd.DataFrame):
@@ -161,6 +177,7 @@ def main(args):
     # 4. Definição dos Modelos
     
     # Random Forest: Robusto para não-linearidades e interações
+    # ADICIONADO: oob_score=True para avaliação interna em datasets pequenos
     rf = Pipeline([
         ('preproc', preprocessor), 
         ('model', RandomForestClassifier(
@@ -168,14 +185,16 @@ def main(args):
             random_state=42, 
             max_depth=args.rf_max_depth, 
             min_samples_split=args.rf_min_samples_split, 
-            min_samples_leaf=args.rf_min_samples_leaf
+            min_samples_leaf=args.rf_min_samples_leaf,
+            class_weight='balanced_subsample', # Mais agressivo que 'balanced'
+            oob_score=True 
         ))
     ])
     
     # Regressão Logística: Baseline interpretável e probabilística
     lr = Pipeline([
         ('preproc', preprocessor), 
-        ('model', LogisticRegression(max_iter=1000, solver='lbfgs'))
+        ('model', LogisticRegression(max_iter=1000, solver='lbfgs', class_weight='balanced'))
     ])
     
     # 5. Split de Dados
@@ -186,7 +205,7 @@ def main(args):
     print('🚀 Iniciando treinamento dos modelos...')
     rf.fit(X_train, y_train)
     lr.fit(X_train, y_train)
-    
+
     # 7. Serialização (Salvamento)
     os.makedirs('models', exist_ok=True)
     
@@ -208,11 +227,11 @@ if __name__ == '__main__':
     parser.add_argument('--target', type=str, default='target', help='Nome da coluna alvo')
     parser.add_argument('--test_size', type=float, default=0.3, help='Proporção do conjunto de teste')
     
-    # Hiperparâmetros RF
-    parser.add_argument('--n_estimators', type=int, default=300)
-    parser.add_argument('--rf_max_depth', type=int, default=7)
-    parser.add_argument('--rf_min_samples_split', type=int, default=20)
-    parser.add_argument('--rf_min_samples_leaf', type=int, default=10)
+    # Hiperparâmetros RF - Ajustados para evitar Overfitting em dados pequenos
+    parser.add_argument('--n_estimators', type=int, default=500) # Aumentado para estabilidade
+    parser.add_argument('--rf_max_depth', type=int, default=5)   # Mantido baixo
+    parser.add_argument('--rf_min_samples_split', type=int, default=10) # Aumentado para evitar nós muito específicos
+    parser.add_argument('--rf_min_samples_leaf', type=int, default=5)   # Aumentado para garantir robustez
     
     args = parser.parse_args()
     main(args)

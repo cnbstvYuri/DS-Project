@@ -158,10 +158,8 @@ def get_feature_names_from_pipeline(pipeline, X_sample=None):
     """
     try:
         # Tenta localizar o passo de pré-processamento no Pipeline
-        # Nomes comuns: 'preproc', 'preprocess', 'preprocessor'
-        pre = (pipeline.named_steps.get('preproc') or 
-               pipeline.named_steps.get('preprocess') or 
-               pipeline.named_steps.get('preprocessor'))
+        
+        pre = (pipeline.named_steps.get('preprocessor'))
         
         if pre is None:
             # Se não achar, devolve as colunas originais como fallback
@@ -176,44 +174,4 @@ def get_feature_names_from_pipeline(pipeline, X_sample=None):
             
     except Exception:
         return None
-    
-# ==============================================================================
-# 5. LIMPEZA ESTATÍSTICA (OUTLIERS)
-# ==============================================================================
 
-def remove_outliers_iqr(df, columns, factor=1.5):
-    """
-    Remove outliers usando o método do Intervalo Interquartil (IQR).
-    
-    Args:
-        df: DataFrame original.
-        columns: Lista de colunas numéricas para checar.
-        factor: Rigidez do filtro. 1.5 é padrão. 3.0 remove apenas extremos.
-        
-    Returns:
-        DataFrame sem os outliers.
-    """
-    df_clean = df.copy()
-    indices_to_drop = []
-    
-    for col in columns:
-        if col in df_clean.columns:
-            Q1 = df_clean[col].quantile(0.25)
-            Q3 = df_clean[col].quantile(0.75)
-            IQR = Q3 - Q1
-            
-            lower_bound = Q1 - (factor * IQR)
-            upper_bound = Q3 + (factor * IQR)
-            
-            # Identifica índices fora dos limites
-            outliers = df_clean[(df_clean[col] < lower_bound) | (df_clean[col] > upper_bound)].index
-            indices_to_drop.extend(outliers)
-            
-    # Remove duplicatas de índices (um paciente pode ser outlier em 2 colunas)
-    indices_to_drop = list(set(indices_to_drop))
-    
-    if indices_to_drop:
-        print(f"✂️  IQR OUTLIERS: Removendo {len(indices_to_drop)} pacientes discrepantes.")
-        df_clean = df_clean.drop(indices_to_drop)
-        
-    return df_clean
